@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automatic Gain Control</title>
+<style>
+:root{
+  --bg:#241F1C; --panel:#2F2926; --panel-hi:#3A322E;
+  --ivory:#EDE4D6; --muted:#9A8E7F; --rule:#4A4039;
+  --teal:#4E9A8F; --amber:#E0A33C; --rust:#C4593B;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:18px;background:var(--bg);color:var(--ivory);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:900px;margin:0 auto}
+h1{font-size:22px;font-weight:600;margin:0 0 4px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+.panel{background:var(--panel);border:1px solid var(--rule);padding:14px;margin-bottom:14px}
+h2{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);
+  margin:0 0 10px;font-weight:600}
+
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button{font-size:14px;background:var(--panel-hi);color:var(--ivory);
+  border:1px solid var(--rule);padding:8px 14px;cursor:pointer;border-radius:2px}
+button:hover{border-color:var(--muted)}
+button[aria-pressed="true"]{background:var(--amber);color:var(--bg);border-color:var(--amber)}
+button.go{background:var(--teal);color:#12201E;border-color:var(--teal);font-weight:600}
+button.go[data-on="1"]{background:var(--rust);color:#fff;border-color:var(--rust)}
+.filebtn{display:inline-block;font-size:14px;text-transform:none;letter-spacing:normal;
+  background:var(--panel-hi);color:var(--ivory);margin:0;
+  border:1px solid var(--rule);padding:8px 14px;cursor:pointer;border-radius:2px}
+.filebtn:hover{border-color:var(--muted)}
+.filebtn[aria-pressed="true"]{background:var(--amber);color:var(--bg);border-color:var(--amber)}
+input[type=file]{display:none}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+
+canvas{display:block;width:100%;height:280px;background:#1C1815;border:1px solid var(--rule)}
+.legend{display:flex;gap:16px;margin-top:8px;font-size:11px;color:var(--muted);flex-wrap:wrap}
+.key{display:inline-block;width:15px;height:3px;vertical-align:middle;margin-right:5px}
+
+.meters{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:14px}
+.mlab{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.mval{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:20px}
+
+.ctls{display:grid;grid-template-columns:1fr 1fr;gap:14px 20px}
+@media(max-width:560px){.ctls{grid-template-columns:1fr}}
+label{display:flex;justify-content:space-between;font-size:12px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+label b{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--ivory);font-weight:500}
+input[type=range]{width:100%;accent-color:var(--amber)}
+.status{font-size:12px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+
+<h1>Automatic Gain Control</h1>
+<p class="sub">Amplifies audio in real time, with the gain varying according to the input amplitude.</p>
+<!-- Replace the line below with the submitter's own name and their own roll number. -->
+<p class="sub" id="author" style="margin-top:-12px">Name &middot; Roll number</p>
+
+<div class="panel">
+  <div class="bar">
+    <button id="src-test" aria-pressed="true">Test signal</button>
+    <button id="src-mic" aria-pressed="false">Microphone</button>
+    <label class="filebtn" id="src-file" for="fileinput" tabindex="0" role="button"
+           aria-pressed="false">Audio file</label>
+    <input type="file" id="fileinput" accept="audio/*">
+    <button id="run" class="go" data-on="0">Start</button>
+  </div>
+  <div class="status" id="status">stopped</div>
+</div>
+
+<div class="panel">
+  <h2>Level and gain</h2>
+  <canvas id="scope"></canvas>
+  <div class="legend">
+    <span><i class="key" style="background:var(--teal)"></i>input level</span>
+    <span><i class="key" style="background:var(--ivory)"></i>output level</span>
+    <span><i class="key" style="background:var(--amber)"></i>gain applied</span>
+    <span><i class="key" style="background:var(--rust)"></i>target</span>
+  </div>
+  <div class="meters">
+    <div><div class="mlab">Input</div><div class="mval" id="m-in">—</div></div>
+    <div><div class="mlab">Gain</div><div class="mval" id="m-g">—</div></div>
+    <div><div class="mlab">Output</div><div class="mval" id="m-out">—</div></div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>Controls</h2>
+  <div class="ctls">
+    <div><label for="p-target">Target level <b id="v-target">-18 dBFS</b></label>
+      <input type="range" id="p-target" min="-40" max="-3" step="1" value="-18"></div>
+    <div><label for="p-max">Maximum gain <b id="v-max">30 dB</b></label>
+      <input type="range" id="p-max" min="0" max="48" step="1" value="30"></div>
+    <div><label for="p-atk">Attack <b id="v-atk">10 ms</b></label>
+      <input type="range" id="p-atk" min="1" max="200" step="1" value="10"></div>
+    <div><label for="p-rel">Release <b id="v-rel">200 ms</b></label>
+      <input type="range" id="p-rel" min="10" max="2000" step="10" value="200"></div>
+  </div>
+</div>
+
+<script>
+/* ---------------------------------------------------------------
+   AGC — envelope detector, gain computer, attack/release, limiter.
+   Defined once and also injected into the AudioWorklet below.
+   --------------------------------------------------------------- */
+class AGC {
+  static toDb(a){ return 20*Math.log10(Math.max(a,1e-12)); }
+  static fromDb(d){ return Math.pow(10,d/20); }
+  static tc(ms,fs){ return Math.exp(-1/((ms/1000)*fs)); }   // one-pole coefficient
+
+  constructor(fs,p){ this.fs=fs; this.params={}; this.set(p||{}); this.reset(); }
+
+  set(p){
+    const q=Object.assign({targetDb:-18, attackMs:10, releaseMs:200, maxGainDb:30},
+                          this.params, p||{});
+    this.params=q;
+    this.aAtk=AGC.tc(q.attackMs,this.fs);
+    this.aRel=AGC.tc(q.releaseMs,this.fs);
+    this.aEnv=AGC.tc(5,this.fs);          // envelope detector, fixed at 5 ms
+  }
+  reset(){ this.env=0; this.gainDb=0; }
+
+  process(x,y){
+    const n=x.length; y=y||new Float32Array(n);
+    const g=new Float32Array(n), e=new Float32Array(n), P=this.params;
+    for(let i=0;i<n;i++){
+      const xi=x[i];
+
+      // 1. envelope detector: smooth x^2, then take the root (RMS)
+      this.env = this.aEnv*this.env + (1-this.aEnv)*xi*xi;
+      const levelDb = AGC.toDb(Math.sqrt(this.env));
+
+      // 2. gain computer: how far below target is the input?
+      let want = P.targetDb - levelDb;
+      if(want > P.maxGainDb) want = P.maxGainDb;
+
+      // 3. attack when the gain must fall, release when it rises
+      const a = want < this.gainDb ? this.aAtk : this.aRel;
+      this.gainDb = a*this.gainDb + (1-a)*want;
+
+      // 4. apply the gain, then limit to full scale
+      let out = xi*AGC.fromDb(this.gainDb);
+      if(out>1) out=1; else if(out<-1) out=-1;
+
+      y[i]=out; g[i]=this.gainDb; e[i]=levelDb;
+    }
+    return {y:y, gainDb:g, levelDb:e};
+  }
+}
+
+const WORKLET_SRC = AGC.toString() + `
+class P extends AudioWorkletProcessor {
+  constructor(){ super(); this.agc=new AGC(sampleRate,{}); this.buf=[];
+    this.port.onmessage = e => this.agc.set(e.data); }
+  process(inputs,outputs){
+    const inp=inputs[0], out=outputs[0];
+    if(!inp||!inp.length||!inp[0]) return true;
+    const r=this.agc.process(inp[0]);
+    for(let c=0;c<out.length;c++) out[c].set(r.y);
+    let s=0; for(let i=0;i<r.y.length;i++) s+=r.y[i]*r.y[i];
+    this.buf.push(r.levelDb[r.levelDb.length-1], r.gainDb[r.gainDb.length-1],
+                  20*Math.log10(Math.max(Math.sqrt(s/r.y.length),1e-12)));
+    if(this.buf.length>=24){ this.port.postMessage(this.buf); this.buf=[]; }
+    return true;
+  }
+}
+registerProcessor('agc',P);
+`;
+
+/* ------------------------------ app ------------------------------ */
+const $=id=>document.getElementById(id);
+const params={targetDb:-18, attackMs:10, releaseMs:200, maxGainDb:30};
+let ctx=null,node=null,source=null,micStream=null,mainAgc=null,running=false,kind='test';
+let fileBuffer=null,fileName='';
+
+const NP=480;
+const hIn=new Float32Array(NP).fill(-80), hG=new Float32Array(NP),
+      hO=new Float32Array(NP).fill(-80);
+let head=0;
+function push(i,g,o){ hIn[head]=i; hG[head]=g; hO[head]=o; head=(head+1)%NP; }
+
+function meters(i,g,o){
+  $('m-in').textContent=i.toFixed(1)+' dBFS';
+  $('m-g').textContent=(g>=0?'+':'')+g.toFixed(1)+' dB';
+  $('m-out').textContent=o.toFixed(1)+' dBFS';
+}
+
+function draw(){
+  const cv=$('scope'), r=Math.min(devicePixelRatio||1,2);
+  const w=cv.clientWidth||600, h=280;
+  if(cv.width!==Math.round(w*r)||cv.height!==Math.round(h*r)){
+    cv.width=Math.round(w*r); cv.height=Math.round(h*r);
+  }
+  const c=cv.getContext('2d'); c.setTransform(r,0,0,r,0,0); c.clearRect(0,0,w,h);
+  const cs=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  const pad=34, pw=w-pad-8;
+  const yL=db=>8+((0-db)/80)*(h*0.60-8);
+  const gT=Math.max(params.maxGainDb,6), gB=-24;
+  const yG=db=>h*0.68+((gT-db)/(gT-gB))*(h*0.30);
+
+  c.font='10px ui-monospace,monospace'; c.textAlign='right';
+  c.strokeStyle=cs('--rule'); c.fillStyle=cs('--muted');
+  [0,-20,-40,-60,-80].forEach(db=>{ const y=yL(db)+.5;
+    c.beginPath(); c.moveTo(pad,y); c.lineTo(w-8,y); c.stroke(); c.fillText(db,pad-6,y+3); });
+  [gT,0,gB].forEach(db=>{ const y=yG(db)+.5;
+    c.beginPath(); c.moveTo(pad,y); c.lineTo(w-8,y); c.stroke(); c.fillText(db.toFixed(0),pad-6,y+3); });
+  c.fillText('dBFS',w-10,yL(0)+3); c.fillText('GAIN dB',w-10,yG(gT)+3);
+
+  c.strokeStyle=cs('--rust'); c.setLineDash([4,4]);
+  c.beginPath(); c.moveTo(pad,yL(params.targetDb)+.5); c.lineTo(w-8,yL(params.targetDb)+.5);
+  c.stroke(); c.setLineDash([]);
+
+  const tr=(arr,map,col,lw,lo,hi)=>{ c.strokeStyle=col; c.lineWidth=lw; c.beginPath();
+    for(let k=0;k<NP;k++){ const v=Math.max(lo,Math.min(hi,arr[(head+k)%NP]));
+      const x=pad+(k/(NP-1))*pw, y=map(v); k?c.lineTo(x,y):c.moveTo(x,y); } c.stroke(); };
+  tr(hIn,yL,cs('--teal'),1.4,-80,0);
+  tr(hO,yL,cs('--ivory'),1.4,-80,0);
+  tr(hG,yG,cs('--amber'),2,gB,gT);
+}
+
+// stepped test signal: -40, -8, -26, -14 dBFS RMS, 1.4 s each
+function testBuffer(actx){
+  const fs=actx.sampleRate, segs=[[-40,1.4],[-8,1.4],[-26,1.4],[-14,1.4]];
+  const buf=actx.createBuffer(1,Math.round(segs.reduce((s,x)=>s+x[1],0)*fs),fs);
+  const d=buf.getChannelData(0); let i=0;
+  for(const [db,sec] of segs){
+    const amp=AGC.fromDb(db)*Math.SQRT2, n=Math.round(sec*fs);
+    for(let k=0;k<n&&i<d.length;k++,i++) d[i]=amp*Math.sin(2*Math.PI*440*i/fs);
+  }
+  return buf;
+}
+
+async function start(){
+  ctx=new (window.AudioContext||window.webkitAudioContext)();
+  mainAgc=null;
+  try{
+    await ctx.audioWorklet.addModule(URL.createObjectURL(
+      new Blob([WORKLET_SRC],{type:'application/javascript'})));
+    node=new AudioWorkletNode(ctx,'agc');
+    node.port.postMessage(params);
+    node.port.onmessage=e=>{ const d=e.data;
+      for(let k=0;k<d.length;k+=3) push(d[k],d[k+1],d[k+2]);
+      meters(d[d.length-3],d[d.length-2],d[d.length-1]); };
+  }catch(err){
+    // blob worklets are blocked on file:// — run the same class on the main thread
+    mainAgc=new AGC(ctx.sampleRate,params);
+    node=ctx.createScriptProcessor(1024,1,1);
+    node.onaudioprocess=e=>{
+      const x=e.inputBuffer.getChannelData(0), y=e.outputBuffer.getChannelData(0);
+      const r=mainAgc.process(x,y);
+      let s=0; for(let i=0;i<y.length;i++) s+=y[i]*y[i];
+      const iDb=r.levelDb[r.levelDb.length-1], gDb=r.gainDb[r.gainDb.length-1];
+      const oDb=20*Math.log10(Math.max(Math.sqrt(s/y.length),1e-12));
+      push(iDb,gDb,oDb); meters(iDb,gDb,oDb);
+    };
+  }
+
+  const dest=ctx.createGain();
+  if(kind==='mic'){
+    micStream=await navigator.mediaDevices.getUserMedia({audio:{
+      echoCancellation:false, noiseSuppression:false, autoGainControl:false}});
+    source=ctx.createMediaStreamSource(micStream);
+    dest.gain.value=0;                       // muted: prevents acoustic feedback
+    $('status').textContent='running · microphone (output muted — use headphones to listen)';
+  }else if(kind==='file' && fileBuffer){
+    source=ctx.createBufferSource();
+    source.buffer=fileBuffer; source.loop=true; source.start();
+    dest.gain.value=1;
+    $('status').textContent='running · '+fileName;
+  }else{
+    source=ctx.createBufferSource();
+    source.buffer=testBuffer(ctx); source.loop=true; source.start();
+    dest.gain.value=1;
+    $('status').textContent='running · test signal';
+  }
+  source.connect(node); node.connect(dest); dest.connect(ctx.destination);
+  running=true; $('run').textContent='Stop'; $('run').dataset.on='1';
+}
+
+function stop(){
+  try{ source.disconnect(); node.disconnect(); }catch(e){}
+  if(source&&source.stop) try{ source.stop(); }catch(e){}
+  if(micStream){ micStream.getTracks().forEach(t=>t.stop()); micStream=null; }
+  if(ctx) ctx.close();
+  ctx=null; node=null; mainAgc=null; running=false;
+  $('run').textContent='Start'; $('run').dataset.on='0'; $('status').textContent='stopped';
+}
+
+function bind(id,key,unit){
+  $(id).addEventListener('input',e=>{
+    params[key]=+e.target.value;
+    $('v-'+id.split('-')[1]).textContent=params[key]+' '+unit;
+    if(mainAgc) mainAgc.set(params);
+    else if(node&&node.port) node.port.postMessage(params);
+  });
+}
+bind('p-target','targetDb','dBFS'); bind('p-max','maxGainDb','dB');
+bind('p-atk','attackMs','ms');      bind('p-rel','releaseMs','ms');
+
+function setSrc(k){ kind=k;
+  $('src-test').setAttribute('aria-pressed',String(k==='test'));
+  $('src-mic').setAttribute('aria-pressed',String(k==='mic'));
+  $('src-file').setAttribute('aria-pressed',String(k==='file'));
+  if(running){ stop(); start(); }
+}
+
+// load an audio file: decode it once, then play it through the AGC on a loop
+$('fileinput').addEventListener('change', async e => {
+  const f=e.target.files[0]; if(!f) return;
+  $('status').textContent='decoding '+f.name+' ...';
+  try{
+    const tmp=new (window.AudioContext||window.webkitAudioContext)();
+    fileBuffer=await tmp.decodeAudioData(await f.arrayBuffer());
+    tmp.close();
+    fileName=f.name;
+    setSrc('file');
+    if(!running) $('status').textContent='loaded '+f.name+' · '+fileBuffer.duration.toFixed(1)+' s';
+  }catch(err){
+    fileBuffer=null;
+    $('status').textContent='Could not decode that file. Try a .wav or .mp3.';
+  }
+});
+$('src-file').addEventListener('keydown', e => {
+  if(e.key==='Enter'||e.key===' '){ e.preventDefault(); $('fileinput').click(); }});
+$('src-test').onclick=()=>setSrc('test');
+$('src-mic').onclick=()=>setSrc('mic');
+$('run').onclick=()=>{ if(running) stop();
+  else start().catch(err=>{ $('status').textContent='Error: '+err.message; }); };
+
+(function loop(){ draw(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>
